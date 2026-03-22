@@ -1,0 +1,929 @@
+From 78ad03957596115b5adb03c535851494fb933773 Mon Sep 17 00:00:00 2001
+From: Dmitrii Gudov <gudovdo@my.msu.ru>
+Date: Sun, 22 Mar 2026 16:56:16 +0300
+Subject: [PATCH] hw
+
+---
+ 20260316/1/client.py     | 315 +++++++++++++++++++++++++++++++++
+ 20260316/1/mud_engine.py | 122 +++++++++++++
+ 20260316/1/prog.py       | 365 ---------------------------------------
+ 20260316/1/server.py     |  84 +++++++++
+ 4 files changed, 521 insertions(+), 365 deletions(-)
+ create mode 100644 20260316/1/client.py
+ create mode 100644 20260316/1/mud_engine.py
+ delete mode 100644 20260316/1/prog.py
+ create mode 100644 20260316/1/server.py
+
+diff --git a/20260316/1/client.py b/20260316/1/client.py
+new file mode 100644
+index 0000000..c890316
+--- /dev/null
++++ b/20260316/1/client.py
+@@ -0,0 +1,315 @@
++"""Клиент MUD: ввод пользователя, проверки, отправка команд на сервер, вывод и cowsay."""
++
++from __future__ import annotations
++
++import argparse
++import cmd
++import json
++import shlex
++import socket
++from pathlib import Path
++
++from cowsay import cowsay, list_cows, read_dot_cow
++
++from mud_engine import SPECIAL_MONSTER, VERSION, WEAPONS
++
++AVAILABLE_MONSTERS = [*list_cows(), SPECIAL_MONSTER]
++
++_ROOT = Path(__file__).resolve().parent
++with open(_ROOT / "jgsbat", encoding="utf-8") as _f:
++    JGSBAT_COW = read_dot_cow(_f)
++
++
++class InvalidCommand(RuntimeError):
++    pass
++
++
++def parse_addmon(parts: list[str]) -> tuple[tuple[str, str, int], int, int]:
++    if not parts:
++        raise InvalidCommand
++
++    monster_name = parts[0]
++    rest = parts[1:]
++
++    values: dict[str, object] = {}
++    index = 0
++
++    while index < len(rest):
++        token = rest[index]
++
++        if token in values:
++            raise InvalidCommand
++
++        if token == "hello":
++            if index + 1 >= len(rest):
++                raise InvalidCommand
++            values["hello"] = rest[index + 1]
++            index += 2
++            continue
++
++        if token == "hp":
++            if index + 1 >= len(rest):
++                raise InvalidCommand
++            try:
++                hp_value = int(rest[index + 1])
++            except ValueError:
++                raise InvalidCommand
++            if hp_value <= 0:
++                raise InvalidCommand
++            values["hp"] = hp_value
++            index += 2
++            continue
++
++        if token == "coords":
++            if index + 2 >= len(rest):
++                raise InvalidCommand
++            try:
++                x_coord = int(rest[index + 1])
++                y_coord = int(rest[index + 2])
++            except ValueError:
++                raise InvalidCommand
++            values["coords"] = (x_coord, y_coord)
++            index += 3
++            continue
++
++        raise InvalidCommand
++
++    required = {"hello", "hp", "coords"}
++    if set(values) != required:
++        raise InvalidCommand
++
++    x, y = values["coords"]
++    hello = str(values["hello"])
++    hp = int(values["hp"])
++    return (monster_name, hello, hp), x, y
++
++
++def parse_attack(parts: list[str]) -> tuple[str | None, str]:
++    if not parts:
++        return None, "sword"
++
++    if parts[0] == "with":
++        if len(parts) != 2:
++            raise InvalidCommand
++        return None, parts[1]
++
++    if len(parts) == 1:
++        return parts[0], "sword"
++
++    if len(parts) == 3 and parts[1] == "with":
++        return parts[0], parts[2]
++
++    raise InvalidCommand
++
++
++def render_monster(name: str, hello: str) -> str:
++    if name == SPECIAL_MONSTER:
++        return cowsay(message=hello, cowfile=JGSBAT_COW)
++    return cowsay(message=hello, cow=name)
++
++
++MOVES = {
++    "right": (1, 0),
++    "left": (-1, 0),
++    "up": (0, 1),
++    "down": (0, -1),
++}
++
++
++class RemoteSession:
++    def __init__(self, host: str, port: int) -> None:
++        self._sock = socket.create_connection((host, port))
++        self._buf = bytearray()
++
++    def close(self) -> None:
++        self._sock.close()
++
++    def call(self, line: str) -> dict[str, object]:
++        self._sock.sendall((line + "\n").encode())
++        while b"\n" not in self._buf:
++            chunk = self._sock.recv(4096)
++            if not chunk:
++                raise ConnectionError("сервер закрыл соединение")
++            self._buf.extend(chunk)
++        i = self._buf.index(b"\n")
++        raw = bytes(self._buf[:i]).decode()
++        del self._buf[: i + 1]
++        return json.loads(raw)
++
++
++class GameClientRunner:
++    def __init__(self, session: RemoteSession) -> None:
++        self._session = session
++
++    def process_line(self, line: str) -> None:
++        try:
++            parts = shlex.split(line)
++            if not parts:
++                return
++            self.execute(parts)
++        except InvalidCommand:
++            print("Invalid command")
++        except ConnectionError as e:
++            print(e)
++        except OSError as e:
++            print(f"Сетевая ошибка: {e}")
++        except json.JSONDecodeError:
++            print("Некорректный ответ сервера")
++
++    def execute(self, parts: list[str]) -> None:
++        command, *args = parts
++
++        if command in MOVES:
++            if args:
++                raise InvalidCommand
++            dx, dy = MOVES[command]
++            proto = shlex.join(["move", str(dx), str(dy)])
++            self._emit(self._session.call(proto))
++            return
++
++        if command == "addmon":
++            (name, hello, hp), x, y = parse_addmon(args)
++            if name not in AVAILABLE_MONSTERS:
++                print("Cannot add unknown monster")
++                return
++            proto = shlex.join(["addmon", name, hello, str(hp), str(x), str(y)])
++            self._emit(self._session.call(proto))
++            return
++
++        if command == "attack":
++            monster_name, weapon_name = parse_attack(args)
++            if weapon_name not in WEAPONS:
++                print("Unknown weapon")
++                return
++            damage = WEAPONS[weapon_name]
++            target = "*" if monster_name is None else monster_name
++            proto = shlex.join(["attack", target, str(damage)])
++            self._emit(self._session.call(proto))
++            return
++
++        raise InvalidCommand
++
++    def _emit(self, r: dict[str, object]) -> None:
++        t = r.get("t")
++        if t == "proto_error":
++            print(r.get("msg", r))
++            return
++        if t == "move":
++            print(f"Moved to ({r['x']}, {r['y']})")
++            enc = r.get("encounter")
++            if isinstance(enc, dict):
++                print(render_monster(str(enc["name"]), str(enc["hello"])))
++            return
++        if t == "addmon":
++            print(
++                f"Added monster to ({r['x']}, {r['y']}) saying {r['hello']}"
++            )
++            if r.get("replaced"):
++                print("Replaced the old monster")
++            return
++        if t == "attack":
++            if not r.get("ok"):
++                why = r.get("why")
++                if why == "empty":
++                    print("No monster here")
++                elif why == "wrong_name":
++                    print(f"No {r['name']} here")
++                else:
++                    print("Invalid command")
++                return
++            name = str(r["name"])
++            dealt = int(r["dealt"])
++            left = int(r["left"])
++            print(f"Attacked {name}, damage {dealt} hp")
++            if left == 0:
++                print(f"{name} died")
++            else:
++                print(f"{name} now has {left}")
++            return
++        print(r)
++
++
++class GameShell(cmd.Cmd):
++    prompt = ">>> "
++
++    def __init__(self, runner: GameClientRunner) -> None:
++        super().__init__()
++        self._runner = runner
++
++    def emptyline(self) -> None:
++        pass
++
++    def default(self, line: str) -> None:
++        self._runner.process_line(line)
++
++    def do_up(self, arg: str) -> None:
++        self._run("up", arg)
++
++    def do_down(self, arg: str) -> None:
++        self._run("down", arg)
++
++    def do_left(self, arg: str) -> None:
++        self._run("left", arg)
++
++    def do_right(self, arg: str) -> None:
++        self._run("right", arg)
++
++    def do_addmon(self, arg: str) -> None:
++        self._run("addmon", arg)
++
++    def do_attack(self, arg: str) -> None:
++        self._run("attack", arg)
++
++    def complete_attack(
++        self, text: str, line: str, begidx: int, endidx: int
++    ) -> list[str]:
++        try:
++            parts = shlex.split(line[:begidx])
++        except ValueError:
++            return []
++
++        if len(parts) == 1:
++            return self._match([*AVAILABLE_MONSTERS, "with"], text)
++
++        if len(parts) == 2:
++            if parts[1] == "with":
++                return self._match(list(WEAPONS), text)
++            return self._match(["with"], text)
++
++        if len(parts) == 3 and parts[2] == "with":
++            return self._match(list(WEAPONS), text)
++
++        return []
++
++    def do_EOF(self, arg: str) -> bool:
++        print()
++        return True
++
++    def _run(self, command: str, arg: str) -> None:
++        if arg:
++            self._runner.process_line(f"{command} {arg}")
++        else:
++            self._runner.process_line(command)
++
++    def _match(self, options: list[str], text: str) -> list[str]:
++        return [option for option in options if option.startswith(text)]
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--host", default="127.0.0.1")
++    parser.add_argument("--port", type=int, default=4280)
++    args = parser.parse_args()
++
++    print(f"<<< Welcome to Python-MUD {VERSION} >>>")
++    session = RemoteSession(args.host, args.port)
++    try:
++        runner = GameClientRunner(session)
++        shell = GameShell(runner)
++        shell.cmdloop()
++    finally:
++        session.close()
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/20260316/1/mud_engine.py b/20260316/1/mud_engine.py
+new file mode 100644
+index 0000000..0b9bc92
+--- /dev/null
++++ b/20260316/1/mud_engine.py
+@@ -0,0 +1,122 @@
++"""Игровое состояние и правила MUD без ввода-вывода и без cowsay."""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++VERSION = 0.1
++SPECIAL_MONSTER = "jgsbat"
++WEAPONS = {
++    "sword": 10,
++    "spear": 15,
++    "axe": 20,
++}
++
++
++@dataclass(slots=True)
++class MonsterSpec:
++    name: str
++    hello: str
++    hp: int
++
++
++class CellEvent:
++    def __init__(self, empty: bool = True):
++        self._empty = empty
++
++    def __bool__(self) -> bool:
++        return not self._empty
++
++
++class Monster(CellEvent):
++    def __init__(self, spec: MonsterSpec):
++        super().__init__(empty=False)
++        self._spec = spec
++
++    @property
++    def name(self) -> str:
++        return self._spec.name
++
++    @property
++    def hello(self) -> str:
++        return self._spec.hello
++
++    @property
++    def hp(self) -> int:
++        return self._spec.hp
++
++    @hp.setter
++    def hp(self, value: int) -> None:
++        self._spec.hp = value
++
++
++class Dungeon:
++    def __init__(self, side: int = 10):
++        self._side = side
++        self._field: list[list[CellEvent]] = []
++        self._player = (0, 0)
++        self.clear()
++
++    @property
++    def side(self) -> int:
++        return self._side
++
++    @property
++    def position(self) -> tuple[int, int]:
++        return self._player
++
++    def clear(self) -> None:
++        self._field = [
++            [CellEvent() for _ in range(self._side)] for _ in range(self._side)
++        ]
++
++    def _shift(self, dx: int, dy: int) -> tuple[int, int]:
++        x, y = self._player
++        self._player = ((x + dx) % self._side, (y + dy) % self._side)
++        return self._player
++
++    def _unpack_coords(self, key: tuple[int, int]) -> tuple[int, int]:
++        if not isinstance(key, tuple) or len(key) != 2:
++            raise KeyError
++        return key
++
++    def __getitem__(self, key: tuple[int, int]) -> CellEvent:
++        x, y = self._unpack_coords(key)
++        return self._field[x][y]
++
++    def __setitem__(self, key: tuple[int, int], value: CellEvent) -> None:
++        x, y = self._unpack_coords(key)
++        self._field[x][y] = value
++
++    def move(self, dx: int, dy: int) -> tuple[tuple[int, int], dict[str, str] | None]:
++        pos = self._shift(dx, dy)
++        current = self[pos]
++        if isinstance(current, Monster):
++            return pos, {"name": current.name, "hello": current.hello}
++        return pos, None
++
++    def place_monster(self, x: int, y: int, spec: MonsterSpec) -> bool:
++        replaced = bool(self[x, y])
++        self[x, y] = Monster(MonsterSpec(spec.name, spec.hello, spec.hp))
++        return replaced
++
++    def attack(
++        self, monster_name: str | None, damage: int
++    ) -> dict[str, object]:
++        current = self[self._player]
++
++        if monster_name is None:
++            if not isinstance(current, Monster):
++                return {"ok": False, "why": "empty"}
++        else:
++            if not isinstance(current, Monster) or current.name != monster_name:
++                return {"ok": False, "why": "wrong_name", "name": monster_name}
++
++        assert isinstance(current, Monster)
++        dealt = min(damage, current.hp)
++        current.hp -= dealt
++        left = current.hp
++        name = current.name
++        if left == 0:
++            self[self._player] = CellEvent()
++        return {"ok": True, "name": name, "dealt": dealt, "left": left}
+diff --git a/20260316/1/prog.py b/20260316/1/prog.py
+deleted file mode 100644
+index b7273f5..0000000
+--- a/20260316/1/prog.py
++++ /dev/null
+@@ -1,365 +0,0 @@
+-import cmd
+-import shlex
+-
+-from dataclasses import dataclass
+-from cowsay import cowsay, list_cows, read_dot_cow
+-
+-
+-VERSION = 0.1
+-SPECIAL_MONSTER = "jgsbat"
+-AVAILABLE_MONSTERS = [*list_cows(), SPECIAL_MONSTER]
+-WEAPONS = {
+-    "sword": 10,
+-    "spear": 15,
+-    "axe": 20,
+-}
+-
+-with open("jgsbat") as f:
+-    JGSBAT_COW = read_dot_cow(f)
+-
+-
+-class InvalidCommand(RuntimeError):
+-    pass
+-
+-
+-class UnknownMonster(RuntimeError):
+-    pass
+-
+-
+-class CellEvent:
+-    def __init__(self, empty: bool = True):
+-        self._empty = empty
+-
+-    def __bool__(self) -> bool:
+-        return not self._empty
+-
+-
+-@dataclass(slots=True)
+-class MonsterSpec:
+-    name: str
+-    hello: str
+-    hp: int
+-
+-
+-class Monster(CellEvent):
+-    def __init__(self, spec: MonsterSpec):
+-        super().__init__(empty=False)
+-        self._spec = spec
+-
+-    @property
+-    def name(self) -> str:
+-        return self._spec.name
+-
+-    @property
+-    def hp(self) -> int:
+-        return self._spec.hp
+-
+-    @hp.setter
+-    def hp(self, value: int) -> None:
+-        self._spec.hp = value
+-
+-    def speak(self) -> str:
+-        if self._spec.name == SPECIAL_MONSTER:
+-            return cowsay(message=self._spec.hello, cowfile=JGSBAT_COW)
+-        return cowsay(message=self._spec.hello, cow=self._spec.name)
+-
+-
+-class Dungeon:
+-    def __init__(self, side: int = 10):
+-        self._side = side
+-        self._field = []
+-        self._player = (0, 0)
+-        self.clear()
+-
+-    @property
+-    def side(self) -> int:
+-        return self._side
+-
+-    @property
+-    def position(self) -> tuple[int, int]:
+-        return self._player
+-
+-    def clear(self) -> None:
+-        self._field = [
+-            [CellEvent() for _ in range(self._side)] for _ in range(self._side)
+-        ]
+-
+-    def start(self) -> None:
+-        print(f"<<< Welcome to Python-MUD {VERSION} >>>")
+-        self._player = (0, 0)
+-
+-    def _shift(self, dx: int, dy: int) -> tuple[int, int]:
+-        x, y = self._player
+-        self._player = ((x + dx) % self._side, (y + dy) % self._side)
+-        return self._player
+-
+-    def right(self) -> tuple[int, int]:
+-        return self._shift(1, 0)
+-
+-    def left(self) -> tuple[int, int]:
+-        return self._shift(-1, 0)
+-
+-    def up(self) -> tuple[int, int]:
+-        return self._shift(0, 1)
+-
+-    def down(self) -> tuple[int, int]:
+-        return self._shift(0, -1)
+-
+-    def _unpack_coords(self, key: tuple[int, int]) -> tuple[int, int]:
+-        if not isinstance(key, tuple) or len(key) != 2:
+-            raise KeyError
+-        return key
+-
+-    def __getitem__(self, key: tuple[int, int]) -> CellEvent:
+-        x, y = self._unpack_coords(key)
+-        return self._field[x][y]
+-
+-    def __setitem__(self, key: tuple[int, int], value: CellEvent) -> None:
+-        x, y = self._unpack_coords(key)
+-        self._field[x][y] = value
+-
+-    def place_monster(self, x: int, y: int, spec: MonsterSpec) -> CellEvent:
+-        if spec.name not in AVAILABLE_MONSTERS:
+-            raise UnknownMonster
+-        self[x, y] = Monster(MonsterSpec(spec.name, spec.hello, spec.hp))
+-        return self[x, y]
+-
+-    def trigger_cell(self, x: int, y: int) -> list[str]:
+-        current = self[x, y]
+-        if isinstance(current, Monster):
+-            return [current.speak()]
+-        return []
+-
+-    def attack(self, monster_name: str | None, damage: int) -> list[str]:
+-        current = self[self._player]
+-
+-        if monster_name is None:
+-            if not isinstance(current, Monster):
+-                return ["No monster here"]
+-        else:
+-            if not isinstance(current, Monster) or current.name != monster_name:
+-                return [f"No {monster_name} here"]
+-
+-        dealt = min(damage, current.hp)
+-        current.hp -= dealt
+-
+-        messages = [f"Attacked {current.name}, damage {dealt} hp"]
+-
+-        if current.hp == 0:
+-            messages.append(f"{current.name} died")
+-            self[self._player] = CellEvent()
+-        else:
+-            messages.append(f"{current.name} now has {current.hp}")
+-
+-        return messages
+-
+-
+-def parse_addmon(parts: list[str]) -> tuple[MonsterSpec, int, int]:
+-    if not parts:
+-        raise InvalidCommand
+-
+-    monster_name = parts[0]
+-    rest = parts[1:]
+-
+-    values: dict[str, object] = {}
+-    index = 0
+-
+-    while index < len(rest):
+-        token = rest[index]
+-
+-        if token in values:
+-            raise InvalidCommand
+-
+-        if token == "hello":
+-            if index + 1 >= len(rest):
+-                raise InvalidCommand
+-            values["hello"] = rest[index + 1]
+-            index += 2
+-            continue
+-
+-        if token == "hp":
+-            if index + 1 >= len(rest):
+-                raise InvalidCommand
+-            try:
+-                hp_value = int(rest[index + 1])
+-            except ValueError:
+-                raise InvalidCommand
+-            if hp_value <= 0:
+-                raise InvalidCommand
+-            values["hp"] = hp_value
+-            index += 2
+-            continue
+-
+-        if token == "coords":
+-            if index + 2 >= len(rest):
+-                raise InvalidCommand
+-            try:
+-                x_coord = int(rest[index + 1])
+-                y_coord = int(rest[index + 2])
+-            except ValueError:
+-                raise InvalidCommand
+-            values["coords"] = (x_coord, y_coord)
+-            index += 3
+-            continue
+-
+-        raise InvalidCommand
+-
+-    required = {"hello", "hp", "coords"}
+-    if set(values) != required:
+-        raise InvalidCommand
+-
+-    x, y = values["coords"]
+-    spec = MonsterSpec(
+-        name=monster_name,
+-        hello=values["hello"],
+-        hp=values["hp"],
+-    )
+-    return spec, x, y
+-
+-
+-def parse_attack(parts: list[str]) -> tuple[str | None, str]:
+-    if not parts:
+-        return None, "sword"
+-
+-    if parts[0] == "with":
+-        if len(parts) != 2:
+-            raise InvalidCommand
+-        return None, parts[1]
+-
+-    if len(parts) == 1:
+-        return parts[0], "sword"
+-
+-    if len(parts) == 3 and parts[1] == "with":
+-        return parts[0], parts[2]
+-
+-    raise InvalidCommand
+-
+-
+-class GameRunner:
+-    def __init__(self, game: Dungeon):
+-        self._game = game
+-        self._moves = {
+-            "right": self._game.right,
+-            "left": self._game.left,
+-            "up": self._game.up,
+-            "down": self._game.down,
+-        }
+-
+-    def process_line(self, line: str) -> None:
+-        try:
+-            parts = shlex.split(line)
+-            if not parts:
+-                return
+-
+-            for message in self.execute(parts):
+-                print(message)
+-        except UnknownMonster:
+-            print("Cannot add unknown monster")
+-        except Exception:
+-            print("Invalid command")
+-
+-    def execute(self, parts: list[str]) -> list[str]:
+-        command, *args = parts
+-
+-        if command in self._moves:
+-            if args:
+-                raise InvalidCommand
+-            x, y = self._moves[command]()
+-            return [f"Moved to ({x}, {y})", *self._game.trigger_cell(x, y)]
+-
+-        if command == "addmon":
+-            spec, x, y = parse_addmon(args)
+-            replaced = bool(self._game[x, y])
+-            self._game.place_monster(x, y, spec)
+-
+-            messages = [f"Added monster to ({x}, {y}) saying {spec.hello}"]
+-            if replaced:
+-                messages.append("Replaced the old monster")
+-            return messages
+-
+-        if command == "attack":
+-            monster_name, weapon_name = parse_attack(args)
+-            if weapon_name not in WEAPONS:
+-                return ["Unknown weapon"]
+-            return self._game.attack(monster_name, WEAPONS[weapon_name])
+-
+-        raise InvalidCommand
+-
+-
+-class GameShell(cmd.Cmd):
+-    prompt = ">>> "
+-
+-    def __init__(self, runner: GameRunner):
+-        super().__init__()
+-        self._runner = runner
+-
+-    def emptyline(self) -> None:
+-        pass
+-
+-    def default(self, line: str) -> None:
+-        self._runner.process_line(line)
+-
+-    def do_up(self, arg: str) -> None:
+-        self._run("up", arg)
+-
+-    def do_down(self, arg: str) -> None:
+-        self._run("down", arg)
+-
+-    def do_left(self, arg: str) -> None:
+-        self._run("left", arg)
+-
+-    def do_right(self, arg: str) -> None:
+-        self._run("right", arg)
+-
+-    def do_addmon(self, arg: str) -> None:
+-        self._run("addmon", arg)
+-
+-    def do_attack(self, arg: str) -> None:
+-        self._run("attack", arg)
+-
+-    def complete_attack(
+-        self, text: str, line: str, begidx: int, endidx: int
+-    ) -> list[str]:
+-        try:
+-            parts = shlex.split(line[:begidx])
+-        except ValueError:
+-            return []
+-
+-        if len(parts) == 1:
+-            return self._match([*AVAILABLE_MONSTERS, "with"], text)
+-
+-        if len(parts) == 2:
+-            if parts[1] == "with":
+-                return self._match(list(WEAPONS), text)
+-            return self._match(["with"], text)
+-
+-        if len(parts) == 3 and parts[2] == "with":
+-            return self._match(list(WEAPONS), text)
+-
+-        return []
+-
+-    def do_EOF(self, arg: str) -> bool:
+-        print()
+-        return True
+-
+-    def _run(self, command: str, arg: str) -> None:
+-        if arg:
+-            self._runner.process_line(f"{command} {arg}")
+-        else:
+-            self._runner.process_line(command)
+-
+-    def _match(self, options: list[str], text: str) -> list[str]:
+-        return [option for option in options if option.startswith(text)]
+-
+-
+-def main() -> None:
+-    game = Dungeon()
+-    game.start()
+-
+-    runner = GameRunner(game)
+-    shell = GameShell(runner)
+-    shell.cmdloop()
+-
+-
+-if __name__ == "__main__":
+-    main()
+diff --git a/20260316/1/server.py b/20260316/1/server.py
+new file mode 100644
+index 0000000..f2d56f6
+--- /dev/null
++++ b/20260316/1/server.py
+@@ -0,0 +1,84 @@
++"""TCP-сервер MUD: одна строка запроса → одна строка JSON-ответа."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import shlex
++import socket
++from typing import Any
++
++from mud_engine import Dungeon, MonsterSpec
++
++
++def _handle(game: Dungeon, parts: list[str]) -> dict[str, Any]:
++    cmd = parts[0]
++    if cmd == "move":
++        dx, dy = int(parts[1]), int(parts[2])
++        (x, y), encounter = game.move(dx, dy)
++        return {"t": "move", "x": x, "y": y, "encounter": encounter}
++
++    if cmd == "addmon":
++        _, name, hello, hp_s, xs, ys = parts
++        hp, x, y = int(hp_s), int(xs), int(ys)
++        replaced = game.place_monster(x, y, MonsterSpec(name, hello, hp))
++        return {
++            "t": "addmon",
++            "x": x,
++            "y": y,
++            "hello": hello,
++            "replaced": replaced,
++        }
++
++    if cmd == "attack":
++        target, dmg_s = parts[1], parts[2]
++        damage = int(dmg_s)
++        monster_name: str | None = None if target == "*" else target
++        result = game.attack(monster_name, damage)
++        return {"t": "attack", **result}
++
++    return {"t": "proto_error", "msg": f"unknown command {cmd!r}"}
++
++
++def _session(conn: socket.socket, game: Dungeon) -> None:
++    buf = bytearray()
++    while True:
++        while b"\n" not in buf:
++            chunk = conn.recv(4096)
++            if not chunk:
++                return
++            buf.extend(chunk)
++        i = buf.index(b"\n")
++        raw = bytes(buf[:i]).decode()
++        del buf[: i + 1]
++        line = raw.strip()
++        if not line:
++            continue
++        parts = shlex.split(line)
++        try:
++            payload = _handle(game, parts)
++        except (ValueError, IndexError) as e:
++            payload = {"t": "proto_error", "msg": str(e)}
++        conn.sendall((json.dumps(payload, ensure_ascii=False) + "\n").encode())
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--host", default="127.0.0.1")
++    parser.add_argument("--port", type=int, default=4280)
++    args = parser.parse_args()
++
++    game = Dungeon()
++
++    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
++        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
++        sock.bind((args.host, args.port))
++        sock.listen(1)
++        while True:
++            conn, _ = sock.accept()
++            with conn:
++                _session(conn, game)
++
++
++if __name__ == "__main__":
++    main()
+-- 
+2.51.2
+
