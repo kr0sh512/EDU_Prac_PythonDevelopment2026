@@ -1,4 +1,4 @@
-"""Клиент MUD: асинхронный приём сообщений и ввод команд."""
+"""Blocking socket client, command parsing, and ``cmd.Cmd`` shell."""
 
 from __future__ import annotations
 
@@ -9,18 +9,19 @@ import shlex
 import socket
 import threading
 
-from mud_engine import SPECIAL_MONSTER, VERSION, WEAPONS
-
 from cowsay import list_cows
+
+from mood.common.engine import SPECIAL_MONSTER, VERSION, WEAPONS
 
 AVAILABLE_MONSTERS = [*list_cows(), SPECIAL_MONSTER]
 
 
 class InvalidCommand(RuntimeError):
-    pass
+    """Raised when user input does not match a supported client command."""
 
 
 def parse_addmon(parts: list[str]) -> tuple[tuple[str, str, int], int, int]:
+    """Parse ``addmon`` arguments into monster tuple and coordinates."""
     if not parts:
         raise InvalidCommand
 
@@ -81,6 +82,7 @@ def parse_addmon(parts: list[str]) -> tuple[tuple[str, str, int], int, int]:
 
 
 def parse_attack(parts: list[str]) -> tuple[str | None, str]:
+    """Parse ``attack`` arguments into optional monster name and weapon."""
     if not parts:
         return None, "sword"
 
@@ -107,11 +109,13 @@ MOVES = {
 
 
 class RemoteSession:
+    """TCP session that performs login and framed line IO."""
+
     def __init__(self, host: str, port: int, username: str) -> None:
+        """Connect, send ``login``, and require an acceptance line."""
         self._sock = socket.create_connection((host, port))
         self._send_lock = threading.Lock()
         self._alive = True
-        self._username = username
         self._buf = bytearray()
         self.send(shlex.join(["login", username]))
         reply = self.read_line()
@@ -123,18 +127,22 @@ class RemoteSession:
             raise ConnectionError(reply)
 
     def close(self) -> None:
+        """Close the socket and mark the session inactive."""
         self._alive = False
         self._sock.close()
 
     @property
     def alive(self) -> bool:
+        """Return whether the session is still usable."""
         return self._alive
 
     def send(self, line: str) -> None:
+        """Send one newline-terminated line to the server."""
         with self._send_lock:
             self._sock.sendall((line + "\n").encode())
 
     def read_line(self) -> str | None:
+        """Read the next complete line, or ``None`` if the peer closed."""
         while b"\n" not in self._buf:
             chunk = self._sock.recv(4096)
             if not chunk:
@@ -147,10 +155,14 @@ class RemoteSession:
 
 
 class GameClientRunner:
+    """Translate shell input into wire protocol lines."""
+
     def __init__(self, session: RemoteSession) -> None:
+        """Store the active ``RemoteSession``."""
         self._session = session
 
     def process_line(self, line: str) -> None:
+        """Split ``line`` with ``shlex`` and dispatch to :meth:`execute`."""
         try:
             parts = shlex.split(line)
             if not parts:
@@ -164,6 +176,7 @@ class GameClientRunner:
             print(f"Сетевая ошибка: {e}")
 
     def execute(self, parts: list[str]) -> None:
+        """Map a parsed command to a server line and send it."""
         command, *args = parts
 
         if command in MOVES:
@@ -202,39 +215,55 @@ class GameClientRunner:
 
 
 class GameShell(cmd.Cmd):
+    """Readline-based loop that forwards lines to :class:`GameClientRunner`."""
+
     prompt = ">>> "
 
     def __init__(self, runner: GameClientRunner) -> None:
+        """Attach ``runner`` for command handling."""
         super().__init__()
         self._runner = runner
 
     def emptyline(self) -> None:
+        """Ignore blank input (no repeat-last-command)."""
         pass
 
     def default(self, line: str) -> None:
+        """Handle unknown commands such as ``sayall`` with arguments."""
         self._runner.process_line(line)
 
     def do_up(self, arg: str) -> None:
+        """Move one step up (increase y)."""
         self._run("up", arg)
 
     def do_down(self, arg: str) -> None:
+        """Move one step down (decrease y)."""
         self._run("down", arg)
 
     def do_left(self, arg: str) -> None:
+        """Move one step left (decrease x)."""
         self._run("left", arg)
 
     def do_right(self, arg: str) -> None:
+        """Move one step right (increase x)."""
         self._run("right", arg)
 
     def do_addmon(self, arg: str) -> None:
+        """Place a monster using the friendly ``addmon`` syntax."""
         self._run("addmon", arg)
 
     def do_attack(self, arg: str) -> None:
+        """Attack the current cell's monster with an optional weapon."""
         self._run("attack", arg)
 
+    def do_sayall(self, arg: str) -> None:
+        """Broadcast one word or a quoted phrase to every player."""
+        self._run("sayall", arg)
+
     def complete_attack(
-        self, text: str, line: str, begidx: int, endidx: int
+        self, text: str, line: str, _begidx: int, _endidx: int
     ) -> list[str]:
+        """Offer tab-completion for monster names and weapons."""
         try:
             parts = shlex.split(line[:begidx])
         except ValueError:
@@ -253,7 +282,8 @@ class GameShell(cmd.Cmd):
 
         return []
 
-    def do_EOF(self, arg: str) -> bool:
+    def do_EOF(self, _arg: str) -> bool:
+        """Exit cleanly on Ctrl-D."""
         print()
         return True
 
@@ -268,13 +298,14 @@ class GameShell(cmd.Cmd):
 
 
 def main() -> None:
+    """Parse CLI args, start the async reader thread, and run the shell."""
     parser = argparse.ArgumentParser()
     parser.add_argument("username")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=4280)
     args = parser.parse_args()
 
-    print(f"<<< Welcome to Python-MUD {VERSION} >>>")
+    print(f"<<< Welcome to MOOD {VERSION} >>>")
     session = RemoteSession(args.host, args.port, args.username)
 
     def reader_loop() -> None:

@@ -1,30 +1,35 @@
-"""TCP MUD-сервер с несколькими именованными сессиями."""
+"""TCP session handling and command dispatch for MOOD."""
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import shlex
 from dataclasses import dataclass
 
-from mud_engine import Dungeon, MonsterSpec
+from mood.common.engine import Dungeon, MonsterSpec
 
 
 @dataclass(slots=True)
 class Session:
+    """One logged-in player and their outbound stream."""
+
     name: str
     writer: asyncio.StreamWriter
     pos: tuple[int, int] = (0, 0)
 
 
 class MudServer:
+    """Game server with named sessions and broadcast chat."""
+
     def __init__(self) -> None:
+        """Create an empty server with a fresh dungeon."""
         self._game = Dungeon()
         self._sessions: dict[str, Session] = {}
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        """Accept a login line, then process commands until disconnect."""
         name: str | None = None
         try:
             raw = await reader.readline()
@@ -105,17 +110,17 @@ class MudServer:
                         self.send_to(username, f"No {result['name']} here")
                     return
 
-                name = str(result["name"])
+                mon = str(result["name"])
                 dealt = int(result["dealt"])
                 left = int(result["left"])
                 if left == 0:
                     self.broadcast(
-                        f"{username} attacked {name} with {weapon}: "
-                        f"dealt {dealt}, {name} died"
+                        f"{username} attacked {mon} with {weapon}: "
+                        f"dealt {dealt}, {mon} died"
                     )
                 else:
                     self.broadcast(
-                        f"{username} attacked {name} with {weapon}: "
+                        f"{username} attacked {mon} with {weapon}: "
                         f"dealt {dealt}, hp left {left}"
                     )
                 return
@@ -133,10 +138,12 @@ class MudServer:
             self.send_to(username, "Invalid command")
 
     def broadcast(self, text: str) -> None:
+        """Send ``text`` as a line to every connected session."""
         for sess in self._sessions.values():
             self._send_async(sess.writer, text)
 
     def send_to(self, username: str, text: str) -> None:
+        """Send ``text`` as a line to ``username`` only."""
         sess = self._sessions.get(username)
         if sess is None:
             return
@@ -151,22 +158,3 @@ class MudServer:
 
     def _render_monster(self, name: str, hello: str) -> str:
         return f"{name} says: {hello}"
-
-
-async def amain(host: str, port: int) -> None:
-    server = MudServer()
-    srv = await asyncio.start_server(server.handle_client, host=host, port=port)
-    async with srv:
-        await srv.serve_forever()
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=4280)
-    args = parser.parse_args()
-    asyncio.run(amain(args.host, args.port))
-
-
-if __name__ == "__main__":
-    main()
