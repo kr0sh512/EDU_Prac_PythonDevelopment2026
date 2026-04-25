@@ -1,0 +1,34 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mood-server\n"
+"POT-Creation-Date: 2026-04-26 00:00+0000\n"
+"PO-Revision-Date: 2026-04-26 00:00+0000\n"
+"Language: ru_RU\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : 2);\n"
+
+msgid "Set up locale: {locale}"
+msgstr "Установлена локаль: {locale}"
+
+msgid "{user} entered MUD"
+msgstr "{user} вошел в MUD"
+
+msgid "{user} left MUD"
+msgstr "{user} вышел из MUD"
+
+msgid "{user} set monster {monster} with {hp} at ({x}, {y})"
+msgstr "{user} добавил монстра {monster} с {hp} в ({x}, {y})"
+
+msgid "{user} attacked {monster} with {weapon}: dealt {dealt}, {monster} died"
+msgstr "{user} атаковал {monster} оружием {weapon}: снял {dealt}, {monster} погиб"
+
+msgid "{user} attacked {monster} with {weapon}: dealt {dealt}, hp left {left}"
+msgstr "{user} атаковал {monster} оружием {weapon}: снял {dealt}, осталось {left}"
+
+msgid "{count} hit point"
+msgid_plural "{count} hit points"
+msgstr[0] "{count} очко здоровья"
+msgstr[1] "{count} очка здоровья"
+msgstr[2] "{count} очков здоровья"
