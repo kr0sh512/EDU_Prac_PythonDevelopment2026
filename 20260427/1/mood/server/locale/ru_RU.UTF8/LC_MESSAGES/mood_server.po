@@ -1,0 +1,55 @@
+
+msgid ""
+msgstr ""
+"Project-Id-Version:  mood-server\n"
+"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
+"POT-Creation-Date: 2026-05-01 22:58+0300\n"
+"PO-Revision-Date: 2026-04-26 00:00+0000\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language: ru_RU\n"
+"Language-Team: ru_RU <LL@li.org>\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && "
+"n%10<=4 && (n%100<12 || n%100>14) ? 1 : 2);\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: mood/server/tcp.py:120
+#, python-brace-format
+msgid "{user} entered MUD"
+msgstr "{user} вошел в MUD"
+
+#: mood/server/tcp.py:133
+#, python-brace-format
+msgid "{user} left MUD"
+msgstr "{user} вышел из MUD"
+
+#: mood/server/tcp.py:169
+#, python-brace-format
+msgid "{user} set monster {monster} with {hp} at ({x}, {y})"
+msgstr "{user} добавил монстра {monster} с {hp} в ({x}, {y})"
+
+#: mood/server/tcp.py:199
+#, python-brace-format
+msgid "{user} attacked {monster} with {weapon}: dealt {dealt}, {monster} died"
+msgstr "{user} атаковал {monster} оружием {weapon}: снял {dealt}, {monster} погиб"
+
+#: mood/server/tcp.py:210
+#, python-brace-format
+msgid "{user} attacked {monster} with {weapon}: dealt {dealt}, hp left {left}"
+msgstr "{user} атаковал {monster} оружием {weapon}: снял {dealt}, осталось {left}"
+
+#: mood/server/tcp.py:245
+#, python-brace-format
+msgid "Set up locale: {locale}"
+msgstr "Установлена локаль: {locale}"
+
+#: mood/server/tcp.py:336
+#, python-brace-format
+msgid "{count} hit point"
+msgid_plural "{count} hit points"
+msgstr[0] "{count} очко здоровья"
+msgstr[1] "{count} очка здоровья"
+msgstr[2] "{count} очков здоровья"
+
