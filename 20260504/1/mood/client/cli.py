@@ -10,12 +10,13 @@ import shlex
 import socket
 import threading
 import time
+import webbrowser
 
-from cowsay import list_cows
+from cowsay import char_names
 
 from mood.common.engine import SPECIAL_MONSTER, VERSION, WEAPONS
 
-AVAILABLE_MONSTERS = [*list_cows(), SPECIAL_MONSTER]
+AVAILABLE_MONSTERS = [*char_names, SPECIAL_MONSTER]
 
 
 class InvalidCommand(RuntimeError):
@@ -159,7 +160,9 @@ class RemoteSession:
 class GameClientRunner:
     """Translate shell input into wire protocol lines."""
 
-    def __init__(self, session: RemoteSession, *, min_send_interval: float = 0.0) -> None:
+    def __init__(
+        self, session: RemoteSession, *, min_send_interval: float = 0.0
+    ) -> None:
         """Store the active ``RemoteSession`` and optional send spacing."""
         self._session = session
         self._min_send_interval = min_send_interval
@@ -317,6 +320,14 @@ class GameShell(cmd.Cmd):
             return self._match(list(WEAPONS), text)
 
         return []
+
+    def do_documentation(self, arg: str) -> None:
+        """Open the generated MOOD HTML documentation in the default web browser."""
+        doc_index = pathlib.Path(__file__).parent.parent / "doc" / "html" / "index.html"
+        if not doc_index.exists():
+            print(f"Documentation not found: {doc_index}")
+            return
+        webbrowser.open(doc_index.as_uri())
 
     def do_EOF(self, _arg: str) -> bool:
         """Exit cleanly on Ctrl-D."""

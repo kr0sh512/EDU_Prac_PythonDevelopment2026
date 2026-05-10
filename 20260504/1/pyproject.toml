@@ -1,0 +1,29 @@
+[project]
+name = "mood"
+version = "0.1"
+description = "Multiplayer Object-Oriented Dungeon (cowsay-oriented MUD)"
+requires-python = ">=3.12"
+dependencies = [
+    "cowsay",
+    "babel",
+]
+
+[project.scripts]
+mood-server = "mood.server.__main__:main"
+mood-client = "mood.client.cli:main"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mood*"]
+
+[tool.setuptools.package-data]
+mood = [
+    "server/locale/ru_RU.UTF8/LC_MESSAGES/mood_server.mo",
+    "data/jgsbat",
+    "doc/html/**",
+    "doc/html/**/*",
+]

@@ -11,6 +11,7 @@ babel = "*"
 sphinx = "*"
 doit = "*"
 pytest = "*"
+build = "*"
 
 [requires]
 python_version = "3.12"
